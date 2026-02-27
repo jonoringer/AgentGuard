@@ -1,5 +1,9 @@
 # AgentGuard
 
+<p align="center">
+  <img src="assets/agentguard-icon.svg" alt="AgentGuard icon" width="160" />
+</p>
+
 AgentGuard is a security control plane for autonomous AI agents. It sits between your agent runtime and its tool/MCP execution layer, evaluates every requested action against policy, returns a clear `allow` or `deny` decision with reasons, and records each decision in an auditable event trail. In practice, it acts like a firewall for agent actions: fast enough for real workflows, strict enough for high-risk environments. 🛡️
 
 This tool is built for teams deploying agents in real systems, especially enterprise security teams, platform teams, and engineering orgs using tools like Claude Code, Cursor, or Codex with custom MCP servers. If your agents can read internal files, call APIs, run code, or touch production systems, AgentGuard helps you enforce consistent controls before those actions execute.
