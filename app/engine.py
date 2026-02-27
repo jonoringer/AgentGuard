@@ -23,6 +23,8 @@ class PolicyEngine:
         "sql_injection": 90,
         "code_injection": 90,
         "exfiltration": 85,
+        "retrieval_guard": 85,
+        "output_guard": 80,
     }
 
     def __init__(self, policy: PolicyConfig, dlp_provider: BaseDLPProvider | None = None) -> None:
@@ -35,6 +37,8 @@ class PolicyEngine:
         self._prompt_injection_patterns: list[re.Pattern[str]] = []
         self._sql_injection_patterns: list[re.Pattern[str]] = []
         self._code_injection_patterns: list[re.Pattern[str]] = []
+        self._retrieval_guard_patterns: list[re.Pattern[str]] = []
+        self._output_guard_patterns: list[re.Pattern[str]] = []
         self._bulk_exfil_keywords: list[str] = []
         self._apply_policy(policy)
 
@@ -50,6 +54,8 @@ class PolicyEngine:
             rule_results.append(self._check_prompt_injection(action, reasons))
             rule_results.append(self._check_sql_injection(action, reasons))
             rule_results.append(self._check_code_injection(action, reasons))
+            rule_results.append(self._check_retrieval_guard(action, reasons))
+            rule_results.append(self._check_output_guard(action, reasons))
             rule_results.append(self._check_exfiltration(action, reasons))
 
             risk_score, confidence = self._score_risk(rule_results)
@@ -75,6 +81,8 @@ class PolicyEngine:
         self._prompt_injection_patterns = [re.compile(p, flags=re.IGNORECASE) for p in policy.prompt_injection_regex]
         self._sql_injection_patterns = [re.compile(p, flags=re.IGNORECASE) for p in policy.sql_injection_regex]
         self._code_injection_patterns = [re.compile(p, flags=re.IGNORECASE) for p in policy.code_injection_regex]
+        self._retrieval_guard_patterns = [re.compile(p, flags=re.IGNORECASE) for p in policy.retrieval_guard_regex]
+        self._output_guard_patterns = [re.compile(p, flags=re.IGNORECASE) for p in policy.output_guard_regex]
         self._bulk_exfil_keywords = [k.lower() for k in policy.bulk_exfiltration_keywords]
 
     def _check_tool_scope(self, action: AgentAction, reasons: list[str]) -> RuleResult:
@@ -288,6 +296,54 @@ class PolicyEngine:
             message="No code injection indicators detected",
             severity=0,
         )
+
+    def _check_retrieval_guard(self, action: AgentAction, reasons: list[str]) -> RuleResult:
+        is_retrieval = (action.operation or "").lower().startswith("retrieval")
+        if not is_retrieval:
+            return RuleResult(rule="retrieval_guard", passed=True, message="Retrieval guard not applicable", severity=0)
+
+        text = self._action_to_text(action)
+        for pattern in self._retrieval_guard_patterns:
+            if pattern.search(text):
+                msg = f"Retrieval guard blocked content pattern: {pattern.pattern}"
+                reasons.append(msg)
+                return RuleResult(
+                    rule="retrieval_guard",
+                    passed=False,
+                    message=msg,
+                    severity=self._RULE_SEVERITY["retrieval_guard"],
+                )
+        return RuleResult(rule="retrieval_guard", passed=True, message="Retrieval guard passed", severity=0)
+
+    def _check_output_guard(self, action: AgentAction, reasons: list[str]) -> RuleResult:
+        is_output = (action.operation or "").lower().startswith("output")
+        if not is_output:
+            return RuleResult(rule="output_guard", passed=True, message="Output guard not applicable", severity=0)
+
+        text = self._action_to_text(action)
+        for pattern in self._output_guard_patterns:
+            if pattern.search(text):
+                msg = f"Output guard blocked content pattern: {pattern.pattern}"
+                reasons.append(msg)
+                return RuleResult(
+                    rule="output_guard",
+                    passed=False,
+                    message=msg,
+                    severity=self._RULE_SEVERITY["output_guard"],
+                )
+
+        # Output guard also checks for sensitive secret leakage.
+        for pattern in self._sensitive_patterns:
+            if pattern.search(text):
+                msg = f"Output guard detected sensitive leakage pattern: {pattern.pattern}"
+                reasons.append(msg)
+                return RuleResult(
+                    rule="output_guard",
+                    passed=False,
+                    message=msg,
+                    severity=self._RULE_SEVERITY["output_guard"],
+                )
+        return RuleResult(rule="output_guard", passed=True, message="Output guard passed", severity=0)
 
     @staticmethod
     def _payload_to_text(payload: Any) -> str:

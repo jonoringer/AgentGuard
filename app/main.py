@@ -22,6 +22,7 @@ from .models import (
 )
 from .policy import load_policy
 from .policy_store import PolicyStore
+from .siem import load_siem_exporter
 from .telemetry import create_telemetry
 
 
@@ -47,6 +48,7 @@ def create_app() -> FastAPI:
     }
     audit = AuditStore(db_path=audit_db_path)
     telemetry = create_telemetry(enable_otel=enable_otel, service_name=service_name, otlp_endpoint=otlp_endpoint)
+    siem = load_siem_exporter()
     auth = load_auth_manager()
 
     def _resolve_tenant(auth_context: AuthContext, requested_tenant: str | None) -> str:
@@ -108,6 +110,7 @@ def create_app() -> FastAPI:
             rule_results=rule_results,
         )
         audit.append(audit_record)
+        siem.export(audit_record)
         return EvaluationResponse(
             decision=decision,
             enforcement_action=enforcement_action,
@@ -117,6 +120,22 @@ def create_app() -> FastAPI:
             rule_results=rule_results,
             audit_id=audit_id,
         )
+
+    @app.post("/v1/guard/retrieval", response_model=EvaluationResponse)
+    def evaluate_retrieval(
+        action: AgentAction,
+        auth_context: AuthContext = Depends(auth.require_role(Role.OPERATOR)),
+    ) -> EvaluationResponse:
+        action.operation = action.operation or "retrieval_context"
+        return evaluate(action=action, auth_context=auth_context)
+
+    @app.post("/v1/guard/output", response_model=EvaluationResponse)
+    def evaluate_output(
+        action: AgentAction,
+        auth_context: AuthContext = Depends(auth.require_role(Role.OPERATOR)),
+    ) -> EvaluationResponse:
+        action.operation = action.operation or "output_response"
+        return evaluate(action=action, auth_context=auth_context)
 
     @app.get("/v1/audit/logs", response_model=list[AuditRecord])
     def list_logs(

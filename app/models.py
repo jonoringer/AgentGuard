@@ -77,6 +77,8 @@ class PolicyConfig(BaseModel):
     prompt_injection_regex: list[str] = Field(default_factory=list)
     sql_injection_regex: list[str] = Field(default_factory=list)
     code_injection_regex: list[str] = Field(default_factory=list)
+    retrieval_guard_regex: list[str] = Field(default_factory=list)
+    output_guard_regex: list[str] = Field(default_factory=list)
 
 
 class PolicyVersionSummary(BaseModel):

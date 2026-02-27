@@ -498,5 +498,29 @@
     "(?i)\\bimplant\\b",
     "(?i)\\bbackdoor\\b",
     "(?i)\\bpersistence\\b"
+  ],
+  "retrieval_guard_regex": [
+    "(?i)ignore (all )?(previous|prior) instructions",
+    "(?i)system prompt",
+    "(?i)developer prompt",
+    "(?i)execute this command",
+    "(?i)run shell",
+    "(?i)disable guardrails",
+    "(?i)bypass security",
+    "(?i)exfiltrat",
+    "(?i)return all secrets",
+    "(?i)steal credentials"
+  ],
+  "output_guard_regex": [
+    "(?i)here is the (system|developer) prompt",
+    "(?i)BEGIN (RSA|EC|OPENSSH) PRIVATE KEY",
+    "(?i)password\\s*[:=]",
+    "(?i)api[_-]?key\\s*[:=]",
+    "(?i)bearer\\s+[A-Za-z0-9_\\-.=]{16,}",
+    "(?i)to exploit this",
+    "(?i)run this malware",
+    "(?i)download and execute",
+    "(?i)disable antivirus",
+    "(?i)credential dump"
   ]
 }

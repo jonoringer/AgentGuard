@@ -1,1 +1,1 @@
-__all__ = ["main", "engine", "policy", "models", "audit", "auth", "policy_store", "telemetry", "dlp"]
+__all__ = ["main", "engine", "policy", "models", "audit", "auth", "policy_store", "telemetry", "dlp", "siem"]
