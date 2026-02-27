@@ -56,7 +56,7 @@ def load_font(size):
 h1 = load_font(84)
 h2 = load_font(56)
 body = load_font(28)
-cta = load_font(46)
+cta = load_font(44)
 
 text_x = 360
 d.text((text_x, 170), 'AgentGuard', font=h1, fill=(224, 251, 255))
@@ -66,15 +66,18 @@ d.text((text_x, 397), 'Real-time decisions, scoped permissions, audit trails', f
 
 cta_text = 'Secure Agent Actions Before They Execute'
 left = text_x
-y0 = 455
-bbox = d.textbbox((0, 0), cta_text, font=cta)
-text_w = bbox[2] - bbox[0]
-text_h = bbox[3] - bbox[1]
-pad_x = 28
-pad_y = 14
-pill = (left, y0, left + text_w + pad_x * 2, y0 + text_h + pad_y * 2)
-d.rounded_rectangle(pill, radius=16, fill=(13, 148, 136))
-d.text((left + pad_x, y0 + pad_y - 2), cta_text, font=cta, fill=(235, 255, 255))
+y0 = 470
+
+# Fit text to panel width with no background pill.
+max_right = 1160
+while True:
+    bbox = d.textbbox((0, 0), cta_text, font=cta)
+    text_w = bbox[2] - bbox[0]
+    if left + text_w <= max_right or cta.size <= 30:
+        break
+    cta = load_font(cta.size - 2)
+
+d.text((left, y0), cta_text, font=cta, fill=(169, 245, 255))
 
 out = 'assets/agentguard-social-preview.png'
 img.save(out, 'PNG', optimize=True)
