@@ -13,6 +13,7 @@ class ApiTests(unittest.TestCase):
         os.environ["AGENTGUARD_AUDIT_DB"] = f"{self._tmpdir.name}/audit.db"
         os.environ["AGENTGUARD_POLICY_DB"] = f"{self._tmpdir.name}/policy.db"
         os.environ["AGENTGUARD_SIEM_JSONL_PATH"] = f"{self._tmpdir.name}/siem.jsonl"
+        os.environ["AGENTGUARD_TELEMETRY_JSONL_PATH"] = f"{self._tmpdir.name}/telemetry.jsonl"
         self.client = TestClient(create_app())
 
     def tearDown(self) -> None:
@@ -20,7 +21,9 @@ class ApiTests(unittest.TestCase):
         os.environ.pop("AGENTGUARD_AUDIT_DB", None)
         os.environ.pop("AGENTGUARD_POLICY_DB", None)
         os.environ.pop("AGENTGUARD_SIEM_JSONL_PATH", None)
+        os.environ.pop("AGENTGUARD_TELEMETRY_JSONL_PATH", None)
         os.environ.pop("AGENTGUARD_API_KEYS", None)
+        os.environ.pop("AGENTGUARD_TRUSTED_SSO_SHARED_SECRET", None)
         self._tmpdir.cleanup()
 
     def test_evaluate_endpoint_and_audit_log(self) -> None:
@@ -47,6 +50,10 @@ class ApiTests(unittest.TestCase):
         self.assertGreaterEqual(len(logs.json()), 1)
 
         with open(os.environ["AGENTGUARD_SIEM_JSONL_PATH"], "r", encoding="utf-8") as f:
+            lines = [line.strip() for line in f if line.strip()]
+        self.assertGreaterEqual(len(lines), 1)
+
+        with open(os.environ["AGENTGUARD_TELEMETRY_JSONL_PATH"], "r", encoding="utf-8") as f:
             lines = [line.strip() for line in f if line.strip()]
         self.assertGreaterEqual(len(lines), 1)
 
@@ -133,6 +140,28 @@ class ApiTests(unittest.TestCase):
         )
         self.assertEqual(output.status_code, 200)
         self.assertEqual(output.json()["decision"], "deny")
+
+    def test_trusted_sso_headers_auth(self) -> None:
+        os.environ["AGENTGUARD_TRUSTED_SSO_SHARED_SECRET"] = "shared-secret"
+        client = TestClient(create_app())
+
+        unauthorized = client.post(
+            "/v1/guard/evaluate",
+            json={"agent_id": "build-bot", "tool": "read_file", "payload": {"path": "README.md"}},
+        )
+        self.assertEqual(unauthorized.status_code, 401)
+
+        authorized = client.post(
+            "/v1/guard/evaluate",
+            headers={
+                "x-agentguard-sso-secret": "shared-secret",
+                "x-agentguard-user": "saml-user",
+                "x-agentguard-role": "operator",
+                "x-agentguard-tenant": "tenant-a",
+            },
+            json={"agent_id": "build-bot", "tool": "read_file", "payload": {"path": "README.md"}},
+        )
+        self.assertEqual(authorized.status_code, 200)
 
 
 if __name__ == "__main__":

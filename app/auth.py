@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from enum import Enum
 
-from fastapi import HTTPException, Security, status
+from fastapi import HTTPException, Request, Security, status
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 
 try:
@@ -43,24 +43,40 @@ class OIDCConfig:
     tenant_claim: str = "tenant_id"
 
 
+@dataclass
+class TrustedSSOConfig:
+    shared_secret: str
+    user_header: str = "x-agentguard-user"
+    role_header: str = "x-agentguard-role"
+    tenant_header: str = "x-agentguard-tenant"
+    secret_header: str = "x-agentguard-sso-secret"
+
+
 class AuthManager:
-    def __init__(self, api_keys: dict[str, tuple[Role, str | None]], oidc: OIDCConfig | None) -> None:
+    def __init__(
+        self,
+        api_keys: dict[str, tuple[Role, str | None]],
+        oidc: OIDCConfig | None,
+        trusted_sso: TrustedSSOConfig | None,
+    ) -> None:
         self._api_keys = api_keys
         self._oidc = oidc
+        self._trusted_sso = trusted_sso
         self._api_key_header = APIKeyHeader(name="x-api-key", auto_error=False)
         self._bearer = HTTPBearer(auto_error=False)
         self._jwks_client = jwt.PyJWKClient(oidc.jwks_url) if (oidc and jwt is not None) else None
 
     @property
     def enabled(self) -> bool:
-        return bool(self._api_keys or self._oidc)
+        return bool(self._api_keys or self._oidc or self._trusted_sso)
 
     def require_role(self, min_role: Role):
         async def _dependency(
+            request: Request,
             api_key: str | None = Security(self._api_key_header),
             bearer: HTTPAuthorizationCredentials | None = Security(self._bearer),
         ) -> AuthContext:
-            context = self._authenticate(api_key=api_key, bearer=bearer)
+            context = self._authenticate(request=request, api_key=api_key, bearer=bearer)
             if _ROLE_RANK[context.role] < _ROLE_RANK[min_role]:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
@@ -72,6 +88,7 @@ class AuthManager:
 
     def _authenticate(
         self,
+        request: Request,
         api_key: str | None,
         bearer: HTTPAuthorizationCredentials | None,
     ) -> AuthContext:
@@ -84,6 +101,11 @@ class AuthManager:
 
         if bearer and bearer.credentials and self._oidc and self._jwks_client:
             return self._authenticate_oidc(bearer.credentials)
+
+        if self._trusted_sso:
+            ctx = self._authenticate_trusted_sso_headers(request)
+            if ctx:
+                return ctx
 
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -119,6 +141,21 @@ class AuthManager:
         principal = str(claims.get("sub") or claims.get("email") or "oidc-user")
         return AuthContext(principal_id=principal, role=Role(role_raw), tenant_id=tenant_id, source="oidc")
 
+    def _authenticate_trusted_sso_headers(self, request: Request) -> AuthContext | None:
+        assert self._trusted_sso is not None
+        provided_secret = request.headers.get(self._trusted_sso.secret_header, "")
+        if not provided_secret or provided_secret != self._trusted_sso.shared_secret:
+            return None
+
+        user = request.headers.get(self._trusted_sso.user_header)
+        if not user:
+            return None
+        role_raw = (request.headers.get(self._trusted_sso.role_header) or "viewer").lower().strip()
+        tenant_id = request.headers.get(self._trusted_sso.tenant_header)
+        if role_raw not in {"viewer", "operator", "admin"}:
+            role_raw = "viewer"
+        return AuthContext(principal_id=user, role=Role(role_raw), tenant_id=tenant_id, source="trusted_sso")
+
 
 def load_auth_manager() -> AuthManager:
     raw = os.getenv("AGENTGUARD_API_KEYS", "").strip()
@@ -153,4 +190,15 @@ def load_auth_manager() -> AuthManager:
             tenant_claim=os.getenv("AGENTGUARD_OIDC_TENANT_CLAIM", "tenant_id"),
         )
 
-    return AuthManager(api_keys=parsed, oidc=oidc)
+    trusted_sso = None
+    sso_secret = os.getenv("AGENTGUARD_TRUSTED_SSO_SHARED_SECRET", "").strip()
+    if sso_secret:
+        trusted_sso = TrustedSSOConfig(
+            shared_secret=sso_secret,
+            user_header=os.getenv("AGENTGUARD_TRUSTED_SSO_USER_HEADER", "x-agentguard-user").lower(),
+            role_header=os.getenv("AGENTGUARD_TRUSTED_SSO_ROLE_HEADER", "x-agentguard-role").lower(),
+            tenant_header=os.getenv("AGENTGUARD_TRUSTED_SSO_TENANT_HEADER", "x-agentguard-tenant").lower(),
+            secret_header=os.getenv("AGENTGUARD_TRUSTED_SSO_SECRET_HEADER", "x-agentguard-sso-secret").lower(),
+        )
+
+    return AuthManager(api_keys=parsed, oidc=oidc, trusted_sso=trusted_sso)

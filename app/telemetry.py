@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+from datetime import datetime, timezone
 from contextlib import contextmanager
+from pathlib import Path
 
 
 class NoopTelemetry:
@@ -10,6 +13,42 @@ class NoopTelemetry:
 
     def record_decision(self, decision: str, enforcement_action: str, risk_score: int, elapsed_ms: float) -> None:
         return
+
+
+class JSONLTelemetry(NoopTelemetry):
+    def __init__(self, path: str) -> None:
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+
+    def record_decision(self, decision: str, enforcement_action: str, risk_score: int, elapsed_ms: float) -> None:
+        payload = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "decision": decision,
+            "enforcement_action": enforcement_action,
+            "risk_score": risk_score,
+            "elapsed_ms": elapsed_ms,
+        }
+        with self.path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(payload))
+            f.write("\n")
+
+
+class CompositeTelemetry(NoopTelemetry):
+    def __init__(self, delegates: list[NoopTelemetry | OTelTelemetry]) -> None:
+        self.delegates = delegates
+
+    @contextmanager
+    def evaluate_span(self, agent_id: str, tool: str):
+        if not self.delegates:
+            yield
+            return
+        # Use the first span-capable delegate as the active span source.
+        with self.delegates[0].evaluate_span(agent_id, tool):
+            yield
+
+    def record_decision(self, decision: str, enforcement_action: str, risk_score: int, elapsed_ms: float) -> None:
+        for delegate in self.delegates:
+            delegate.record_decision(decision, enforcement_action, risk_score, elapsed_ms)
 
 
 class OTelTelemetry:
@@ -78,11 +117,21 @@ def create_telemetry(
     enable_otel: bool,
     service_name: str = "agentguard",
     otlp_endpoint: str | None = None,
+    fallback_jsonl_path: str | None = None,
 ) -> NoopTelemetry | OTelTelemetry:
+    delegates: list[NoopTelemetry | OTelTelemetry] = []
+    if fallback_jsonl_path:
+        delegates.append(JSONLTelemetry(fallback_jsonl_path))
+
     if not enable_otel:
+        if delegates:
+            return CompositeTelemetry(delegates)
         return NoopTelemetry()
 
     try:
-        return OTelTelemetry(service_name=service_name, otlp_endpoint=otlp_endpoint)
+        delegates.insert(0, OTelTelemetry(service_name=service_name, otlp_endpoint=otlp_endpoint))
+        return CompositeTelemetry(delegates)
     except Exception:
+        if delegates:
+            return CompositeTelemetry(delegates)
         return NoopTelemetry()

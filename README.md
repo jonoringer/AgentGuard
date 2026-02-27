@@ -245,6 +245,16 @@ export AGENTGUARD_OIDC_ROLE_CLAIM='role'
 export AGENTGUARD_OIDC_TENANT_CLAIM='tenant_id'
 ```
 
+Enable trusted SSO header bridge (for SAML/OIDC proxy deployments):
+
+```bash
+export AGENTGUARD_TRUSTED_SSO_SHARED_SECRET='change-me'
+export AGENTGUARD_TRUSTED_SSO_USER_HEADER='x-agentguard-user'
+export AGENTGUARD_TRUSTED_SSO_ROLE_HEADER='x-agentguard-role'
+export AGENTGUARD_TRUSTED_SSO_TENANT_HEADER='x-agentguard-tenant'
+export AGENTGUARD_TRUSTED_SSO_SECRET_HEADER='x-agentguard-sso-secret'
+```
+
 Policy version database path:
 
 ```bash
@@ -265,6 +275,22 @@ export AGENTGUARD_SIEM_JSONL_PATH=/var/log/agentguard/siem.jsonl
 export AGENTGUARD_SIEM_WEBHOOK_URL='https://siem.example.com/ingest'
 export AGENTGUARD_SIEM_SYSLOG_HOST='10.0.0.25'
 export AGENTGUARD_SIEM_SYSLOG_PORT=514
+```
+
+Configure enterprise DLP providers (optional):
+
+```bash
+export AGENTGUARD_DLP_AWS_REGION='us-east-1'
+export AGENTGUARD_DLP_GCP_PROJECT='my-gcp-project'
+export AGENTGUARD_DLP_PRESIDIO=true
+export AGENTGUARD_DLP_HTTP_ENDPOINT='https://dlp.example.com/inspect'
+export AGENTGUARD_DLP_HTTP_API_KEY='dlp-token'
+```
+
+Telemetry fallback when OTLP collector is unavailable:
+
+```bash
+export AGENTGUARD_TELEMETRY_JSONL_PATH=/var/log/agentguard/telemetry.jsonl
 ```
 
 Key policy fields:
@@ -356,8 +382,8 @@ python -m unittest discover -s tests -v
 
 ## Current limitations
 
-- DLP supports rule-based checks and optional external HTTP provider integration; native enterprise provider SDKs are not yet built
-- OIDC JWT auth is supported; full SAML/SCIM enterprise identity integration is not yet built
-- OTLP export works when collector/network configuration is present in deployment
+- Enterprise DLP coverage depends on configured providers (AWS Comprehend, GCP DLP, Presidio, or HTTP provider)
+- Trusted SSO header bridge requires deployment behind a secure identity proxy
+- Full SCIM user/group lifecycle automation is not yet implemented
 
 For production hardening, run with managed Postgres, OIDC identity, and tenant-scoped governance defaults enabled.

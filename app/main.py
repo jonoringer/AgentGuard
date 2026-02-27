@@ -59,6 +59,7 @@ def create_app() -> FastAPI:
     enable_otel = os.getenv("AGENTGUARD_ENABLE_OTEL", "0").lower() in {"1", "true", "yes"}
     otlp_endpoint = os.getenv("AGENTGUARD_OTEL_ENDPOINT")
     service_name = os.getenv("AGENTGUARD_SERVICE_NAME", "agentguard")
+    telemetry_jsonl = os.getenv("AGENTGUARD_TELEMETRY_JSONL_PATH")
     bootstrap_policy = load_policy(policy_path)
     policy_store = PolicyStore(db_path=policy_db_path)
     policy_store.ensure_seed(bootstrap_policy, tenant_id="global", actor="bootstrap")
@@ -67,7 +68,12 @@ def create_app() -> FastAPI:
         "global": PolicyEngine(policy_store.get_current(tenant_id="global").policy, dlp_provider=dlp_provider)
     }
     audit = AuditStore(db_path=audit_db_path)
-    telemetry = create_telemetry(enable_otel=enable_otel, service_name=service_name, otlp_endpoint=otlp_endpoint)
+    telemetry = create_telemetry(
+        enable_otel=enable_otel,
+        service_name=service_name,
+        otlp_endpoint=otlp_endpoint,
+        fallback_jsonl_path=telemetry_jsonl,
+    )
     siem = load_siem_exporter()
     auth = load_auth_manager()
     resources["audit"] = audit
