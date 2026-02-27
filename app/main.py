@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import time
+from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -27,10 +28,29 @@ from .telemetry import create_telemetry
 
 
 def create_app() -> FastAPI:
+    resources: dict[str, object] = {}
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        yield
+        audit_obj = resources.get("audit")
+        if audit_obj is not None:
+            try:
+                audit_obj.close()
+            except Exception:
+                pass
+        policy_store_obj = resources.get("policy_store")
+        if policy_store_obj is not None:
+            try:
+                policy_store_obj.close()
+            except Exception:
+                pass
+
     app = FastAPI(
         title="AgentGuard",
         version="0.1.0",
         description="Policy firewall and audit layer for autonomous AI agents",
+        lifespan=lifespan,
     )
 
     policy_path = os.getenv("AGENTGUARD_POLICY", "config/default_policy.json")
@@ -50,6 +70,8 @@ def create_app() -> FastAPI:
     telemetry = create_telemetry(enable_otel=enable_otel, service_name=service_name, otlp_endpoint=otlp_endpoint)
     siem = load_siem_exporter()
     auth = load_auth_manager()
+    resources["audit"] = audit
+    resources["policy_store"] = policy_store
 
     def _resolve_tenant(auth_context: AuthContext, requested_tenant: str | None) -> str:
         if auth_context.role is Role.ADMIN and not auth_context.tenant_id:
@@ -200,11 +222,6 @@ def create_app() -> FastAPI:
         else:
             tenant_engines[tenant] = PolicyEngine(approved.policy, dlp_provider=dlp_provider)
         return approved
-
-    @app.on_event("shutdown")
-    def shutdown() -> None:
-        audit.close()
-        policy_store.close()
 
     return app
 
