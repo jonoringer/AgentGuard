@@ -342,6 +342,9 @@ Put AgentGuard inline in your agent execution flow:
 - `GET /v1/policy/versions`: list policy history
 - `POST /v1/policy/propose`: submit proposed policy (admin)
 - `POST /v1/policy/{version}/approve`: approve proposed version and make active (admin)
+- `POST /v1/scim/v2/Users`: SCIM-style user upsert for access provisioning (admin)
+- `GET /v1/scim/v2/Users/{userName}`: fetch provisioned SCIM user (admin)
+- `GET /v1/scim/v2/Users`: list provisioned SCIM users (admin)
 
 Example proposal:
 
@@ -380,10 +383,18 @@ curl -s http://127.0.0.1:8080/v1/policy/propose \
 python -m unittest discover -s tests -v
 ```
 
+## Store migrations
+
+Initialize/verify all stores (audit, policy, SCIM):
+
+```bash
+python scripts/migrate_stores.py
+```
+
 ## Current limitations
 
 - Enterprise DLP coverage depends on configured providers (AWS Comprehend, GCP DLP, Presidio, or HTTP provider)
 - Trusted SSO header bridge requires deployment behind a secure identity proxy
-- Full SCIM user/group lifecycle automation is not yet implemented
+- SCIM support currently focuses on user provisioning; full group/resource schemas are not yet implemented
 
 For production hardening, run with managed Postgres, OIDC identity, and tenant-scoped governance defaults enabled.

@@ -12,6 +12,7 @@ class ApiTests(unittest.TestCase):
         self._tmpdir = tempfile.TemporaryDirectory()
         os.environ["AGENTGUARD_AUDIT_DB"] = f"{self._tmpdir.name}/audit.db"
         os.environ["AGENTGUARD_POLICY_DB"] = f"{self._tmpdir.name}/policy.db"
+        os.environ["AGENTGUARD_SCIM_DB"] = f"{self._tmpdir.name}/scim.db"
         os.environ["AGENTGUARD_SIEM_JSONL_PATH"] = f"{self._tmpdir.name}/siem.jsonl"
         os.environ["AGENTGUARD_TELEMETRY_JSONL_PATH"] = f"{self._tmpdir.name}/telemetry.jsonl"
         self.client = TestClient(create_app())
@@ -20,6 +21,7 @@ class ApiTests(unittest.TestCase):
         self.client.close()
         os.environ.pop("AGENTGUARD_AUDIT_DB", None)
         os.environ.pop("AGENTGUARD_POLICY_DB", None)
+        os.environ.pop("AGENTGUARD_SCIM_DB", None)
         os.environ.pop("AGENTGUARD_SIEM_JSONL_PATH", None)
         os.environ.pop("AGENTGUARD_TELEMETRY_JSONL_PATH", None)
         os.environ.pop("AGENTGUARD_API_KEYS", None)
@@ -162,6 +164,34 @@ class ApiTests(unittest.TestCase):
             json={"agent_id": "build-bot", "tool": "read_file", "payload": {"path": "README.md"}},
         )
         self.assertEqual(authorized.status_code, 200)
+
+    def test_scim_provisioning_overrides_trusted_sso_role(self) -> None:
+        os.environ["AGENTGUARD_TRUSTED_SSO_SHARED_SECRET"] = "shared-secret"
+        os.environ["AGENTGUARD_API_KEYS"] = "admin-key:admin"
+        client = TestClient(create_app())
+
+        upsert = client.post(
+            "/v1/scim/v2/Users",
+            headers={"x-api-key": "admin-key"},
+            json={
+                "userName": "saml-user",
+                "active": True,
+                "urn:agentguard:access": {"role": "viewer", "tenant_id": "tenant-z"},
+            },
+        )
+        self.assertEqual(upsert.status_code, 200)
+
+        forbidden = client.post(
+            "/v1/guard/evaluate",
+            headers={
+                "x-agentguard-sso-secret": "shared-secret",
+                "x-agentguard-user": "saml-user",
+                "x-agentguard-role": "operator",
+                "x-agentguard-tenant": "tenant-z",
+            },
+            json={"agent_id": "build-bot", "tool": "read_file", "payload": {"path": "README.md"}},
+        )
+        self.assertEqual(forbidden.status_code, 403)
 
 
 if __name__ == "__main__":

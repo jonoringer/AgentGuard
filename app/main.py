@@ -23,6 +23,7 @@ from .models import (
 )
 from .policy import load_policy
 from .policy_store import PolicyStore
+from .scim_store import SCIMStore
 from .siem import load_siem_exporter
 from .telemetry import create_telemetry
 
@@ -45,6 +46,12 @@ def create_app() -> FastAPI:
                 policy_store_obj.close()
             except Exception:
                 pass
+        scim_store_obj = resources.get("scim_store")
+        if scim_store_obj is not None:
+            try:
+                scim_store_obj.close()
+            except Exception:
+                pass
 
     app = FastAPI(
         title="AgentGuard",
@@ -56,12 +63,14 @@ def create_app() -> FastAPI:
     policy_path = os.getenv("AGENTGUARD_POLICY", "config/default_policy.json")
     audit_db_path = os.getenv("AGENTGUARD_AUDIT_DB", "agentguard_audit.db")
     policy_db_path = os.getenv("AGENTGUARD_POLICY_DB", "agentguard_policy.db")
+    scim_db_path = os.getenv("AGENTGUARD_SCIM_DB", "agentguard_scim.db")
     enable_otel = os.getenv("AGENTGUARD_ENABLE_OTEL", "0").lower() in {"1", "true", "yes"}
     otlp_endpoint = os.getenv("AGENTGUARD_OTEL_ENDPOINT")
     service_name = os.getenv("AGENTGUARD_SERVICE_NAME", "agentguard")
     telemetry_jsonl = os.getenv("AGENTGUARD_TELEMETRY_JSONL_PATH")
     bootstrap_policy = load_policy(policy_path)
     policy_store = PolicyStore(db_path=policy_db_path)
+    scim_store = SCIMStore(db_path=scim_db_path)
     policy_store.ensure_seed(bootstrap_policy, tenant_id="global", actor="bootstrap")
     dlp_provider = load_dlp_provider()
     tenant_engines: dict[str, PolicyEngine] = {
@@ -78,6 +87,24 @@ def create_app() -> FastAPI:
     auth = load_auth_manager()
     resources["audit"] = audit
     resources["policy_store"] = policy_store
+    resources["scim_store"] = scim_store
+
+    def _enrich_auth_context(context: AuthContext) -> AuthContext:
+        if context.source in {"oidc", "trusted_sso"} and context.principal_id:
+            role, tenant = scim_store.resolve_access(context.principal_id)
+            if role in {"viewer", "operator", "admin"}:
+                return AuthContext(
+                    principal_id=context.principal_id,
+                    role=Role(role),
+                    tenant_id=tenant or context.tenant_id,
+                    source=context.source,
+                )
+        return context
+
+    def _assert_min_role(context: AuthContext, min_role: Role) -> None:
+        rank = {Role.VIEWER: 1, Role.OPERATOR: 2, Role.ADMIN: 3}
+        if rank[context.role] < rank[min_role]:
+            raise HTTPException(status_code=403, detail="Insufficient role for this endpoint")
 
     def _resolve_tenant(auth_context: AuthContext, requested_tenant: str | None) -> str:
         if auth_context.role is Role.ADMIN and not auth_context.tenant_id:
@@ -97,13 +124,23 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     def health() -> dict[str, str]:
-        return {"status": "ok"}
+        status = {
+            "status": "ok",
+            "audit_store": "ok" if audit.ping() else "error",
+            "policy_store": "ok" if policy_store.ping() else "error",
+            "scim_store": "ok" if scim_store.ping() else "error",
+        }
+        if "error" in status.values():
+            status["status"] = "degraded"
+        return status
 
     @app.post("/v1/guard/evaluate", response_model=EvaluationResponse)
     def evaluate(
         action: AgentAction,
         auth_context: AuthContext = Depends(auth.require_role(Role.OPERATOR)),
     ) -> EvaluationResponse:
+        auth_context = _enrich_auth_context(auth_context)
+        _assert_min_role(auth_context, Role.OPERATOR)
         action.tenant_id = _resolve_tenant(auth_context, action.tenant_id)
         tenant = action.tenant_id or "global"
         _ensure_tenant_policy(tenant)
@@ -173,6 +210,8 @@ def create_app() -> FastAPI:
         tenant_id: str | None = Query(default=None),
         auth_context: AuthContext = Depends(auth.require_role(Role.VIEWER)),
     ) -> list[AuditRecord]:
+        auth_context = _enrich_auth_context(auth_context)
+        _assert_min_role(auth_context, Role.VIEWER)
         resolved_tenant = _resolve_tenant(auth_context, tenant_id)
         return audit.query(agent_id=agent_id, decision=decision, limit=limit, tenant_id=resolved_tenant)
 
@@ -190,6 +229,8 @@ def create_app() -> FastAPI:
         tenant_id: str | None = Query(default=None),
         auth_context: AuthContext = Depends(auth.require_role(Role.VIEWER)),
     ) -> PolicyCurrentResponse:
+        auth_context = _enrich_auth_context(auth_context)
+        _assert_min_role(auth_context, Role.VIEWER)
         resolved_tenant = _resolve_tenant(auth_context, tenant_id)
         _ensure_tenant_policy(resolved_tenant)
         return policy_store.get_current(tenant_id=resolved_tenant)
@@ -200,6 +241,8 @@ def create_app() -> FastAPI:
         tenant_id: str | None = Query(default=None),
         auth_context: AuthContext = Depends(auth.require_role(Role.VIEWER)),
     ) -> list[PolicyVersionSummary]:
+        auth_context = _enrich_auth_context(auth_context)
+        _assert_min_role(auth_context, Role.VIEWER)
         resolved_tenant = _resolve_tenant(auth_context, tenant_id)
         _ensure_tenant_policy(resolved_tenant)
         return policy_store.list_versions(tenant_id=resolved_tenant, limit=limit)
@@ -209,6 +252,8 @@ def create_app() -> FastAPI:
         request: PolicyProposeRequest,
         auth_context: AuthContext = Depends(auth.require_role(Role.ADMIN)),
     ) -> PolicyVersionSummary:
+        auth_context = _enrich_auth_context(auth_context)
+        _assert_min_role(auth_context, Role.ADMIN)
         tenant = _resolve_tenant(auth_context, request.tenant_id)
         return policy_store.propose(tenant_id=tenant, policy=request.policy, actor=request.actor)
 
@@ -218,6 +263,8 @@ def create_app() -> FastAPI:
         request: PolicyApproveRequest,
         auth_context: AuthContext = Depends(auth.require_role(Role.ADMIN)),
     ) -> PolicyCurrentResponse:
+        auth_context = _enrich_auth_context(auth_context)
+        _assert_min_role(auth_context, Role.ADMIN)
         tenant = _resolve_tenant(auth_context, request.tenant_id)
         try:
             approved = policy_store.approve(tenant_id=tenant, version=version, actor=request.actor)
@@ -228,6 +275,47 @@ def create_app() -> FastAPI:
         else:
             tenant_engines[tenant] = PolicyEngine(approved.policy, dlp_provider=dlp_provider)
         return approved
+
+    @app.post("/v1/scim/v2/Users")
+    def scim_upsert_user(
+        payload: dict,
+        auth_context: AuthContext = Depends(auth.require_role(Role.ADMIN)),
+    ) -> dict:
+        auth_context = _enrich_auth_context(auth_context)
+        _assert_min_role(auth_context, Role.ADMIN)
+        return scim_store.upsert_user(payload)
+
+    @app.get("/v1/scim/v2/Users/{user_name}")
+    def scim_get_user(
+        user_name: str,
+        auth_context: AuthContext = Depends(auth.require_role(Role.ADMIN)),
+    ) -> dict:
+        auth_context = _enrich_auth_context(auth_context)
+        _assert_min_role(auth_context, Role.ADMIN)
+        try:
+            return scim_store.get_user(user_name)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/v1/scim/v2/Users")
+    def scim_list_users(
+        limit: int = Query(default=200, ge=1, le=1000),
+        auth_context: AuthContext = Depends(auth.require_role(Role.ADMIN)),
+    ) -> dict:
+        auth_context = _enrich_auth_context(auth_context)
+        _assert_min_role(auth_context, Role.ADMIN)
+        resources = scim_store.list_users(limit=limit)
+        return {"Resources": resources, "totalResults": len(resources)}
+
+    @app.delete("/v1/scim/v2/Users/{user_name}")
+    def scim_delete_user(
+        user_name: str,
+        auth_context: AuthContext = Depends(auth.require_role(Role.ADMIN)),
+    ) -> dict:
+        auth_context = _enrich_auth_context(auth_context)
+        _assert_min_role(auth_context, Role.ADMIN)
+        scim_store.delete_user(user_name)
+        return {"deleted": user_name}
 
     return app
 

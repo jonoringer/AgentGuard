@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+import time
 from threading import Lock
 from typing import Any, AsyncGenerator
 from uuid import uuid4
@@ -17,14 +18,25 @@ class AuditStore:
         self._lock = Lock()
         self._subscribers: set[asyncio.Queue[AuditRecord]] = set()
 
-        if self._is_postgres:
-            import psycopg
-            from psycopg.rows import dict_row
+        retries = 3
+        delay = 0.5
+        last_exc: Exception | None = None
+        for _ in range(retries):
+            try:
+                if self._is_postgres:
+                    import psycopg
+                    from psycopg.rows import dict_row
 
-            self._conn = psycopg.connect(db_path, row_factory=dict_row, autocommit=True)
-        else:
-            self._conn = sqlite3.connect(db_path, check_same_thread=False)
-            self._conn.row_factory = sqlite3.Row
+                    self._conn = psycopg.connect(db_path, row_factory=dict_row, autocommit=True)
+                else:
+                    self._conn = sqlite3.connect(db_path, check_same_thread=False)
+                    self._conn.row_factory = sqlite3.Row
+                break
+            except Exception as exc:  # pragma: no cover
+                last_exc = exc
+                time.sleep(delay)
+        else:  # pragma: no cover
+            raise RuntimeError(f"Failed to connect audit store: {last_exc}")
 
         self._init_db()
 
@@ -152,6 +164,13 @@ class AuditStore:
                 yield await queue.get()
         finally:
             self._subscribers.discard(queue)
+
+    def ping(self) -> bool:
+        try:
+            rows = self._fetchall("SELECT 1 AS ok")
+            return bool(rows and rows[0]["ok"] == 1)
+        except Exception:
+            return False
 
     def close(self) -> None:
         with self._lock:
