@@ -15,6 +15,7 @@ class PolicyEngine:
         self.policy = policy
         self._agent_actions: dict[str, deque[datetime]] = defaultdict(deque)
         self._sensitive_patterns = [re.compile(p, flags=re.IGNORECASE) for p in policy.sensitive_regex]
+        self._prompt_injection_patterns = [re.compile(p, flags=re.IGNORECASE) for p in policy.prompt_injection_regex]
 
     def evaluate(self, action: AgentAction) -> tuple[Decision, list[str], list[RuleResult]]:
         reasons: list[str] = []
@@ -24,6 +25,7 @@ class PolicyEngine:
         rule_results.append(self._check_resource_scope(action, reasons))
         rule_results.append(self._check_payload_size(action, reasons))
         rule_results.append(self._check_rate_limit(action, reasons))
+        rule_results.append(self._check_prompt_injection(action, reasons))
         rule_results.append(self._check_exfiltration(action, reasons))
 
         decision = Decision.DENY if reasons else Decision.ALLOW
@@ -110,6 +112,19 @@ class PolicyEngine:
 
         return RuleResult(rule="exfiltration", passed=True, message="No exfiltration indicators detected")
 
+    def _check_prompt_injection(self, action: AgentAction, reasons: list[str]) -> RuleResult:
+        if not self._prompt_injection_patterns:
+            return RuleResult(rule="prompt_injection", passed=True, message="No prompt injection patterns configured")
+
+        text = self._action_to_text(action)
+        for pattern in self._prompt_injection_patterns:
+            if pattern.search(text):
+                msg = f"Potential prompt injection detected by pattern: {pattern.pattern}"
+                reasons.append(msg)
+                return RuleResult(rule="prompt_injection", passed=False, message=msg)
+
+        return RuleResult(rule="prompt_injection", passed=True, message="No prompt injection indicators detected")
+
     @staticmethod
     def _payload_to_text(payload: Any) -> str:
         if payload is None:
@@ -121,3 +136,13 @@ class PolicyEngine:
     @staticmethod
     def _extract_possible_urls(text: str) -> list[str]:
         return re.findall(r"https?://[^\s\"'<>]+", text)
+
+    def _action_to_text(self, action: AgentAction) -> str:
+        parts = [
+            action.tool or "",
+            action.operation or "",
+            action.resource or "",
+            self._payload_to_text(action.payload),
+            self._payload_to_text(action.metadata),
+        ]
+        return "\n".join(parts)

@@ -54,3 +54,4 @@ class PolicyConfig(BaseModel):
     max_payload_bytes: int = 50_000
     blocked_domains: list[str] = Field(default_factory=list)
     sensitive_regex: list[str] = Field(default_factory=list)
+    prompt_injection_regex: list[str] = Field(default_factory=list)

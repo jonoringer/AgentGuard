@@ -173,6 +173,7 @@ Key policy fields:
 - `max_payload_bytes`: payload size guardrail
 - `blocked_domains`: deny if payload references these destinations
 - `sensitive_regex`: patterns for API keys, private keys, bearer tokens, etc.
+- `prompt_injection_regex`: deny patterns for instruction hijacking, jailbreaks, and exfiltration prompts
 
 Example policy fragment:
 
