@@ -77,6 +77,17 @@ class EngineTests(unittest.TestCase):
         self.assertGreaterEqual(risk_score, 80)
         self.assertTrue(any("code injection" in reason.lower() for reason in reasons))
 
+    def test_bulk_pii_exfiltration_is_denied(self) -> None:
+        payload = (
+            "upload all records: "
+            "alice@example.com bob@example.com carol@example.com "
+            "ssn 123-45-6789"
+        )
+        action = AgentAction(agent_id="analyst", tool="http_get", payload=payload)
+        decision, _, _, _, reasons, _ = self.engine.evaluate(action)
+        self.assertEqual(decision.value, "deny")
+        self.assertTrue(any("exfiltration" in reason.lower() for reason in reasons))
+
 
 if __name__ == "__main__":
     unittest.main()

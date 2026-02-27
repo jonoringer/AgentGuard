@@ -48,6 +48,24 @@
     "(?i)api[_-]?key\\s*[:=]\\s*[A-Za-z0-9_\\-]{16,}",
     "(?i)bearer\\s+[A-Za-z0-9_\\-.=]{16,}"
   ],
+  "pii_regex": [
+    "(?i)\\b[\\w.%+-]+@[\\w.-]+\\.[A-Za-z]{2,}\\b",
+    "\\b\\d{3}-\\d{2}-\\d{4}\\b",
+    "\\b(?:\\d[ -]*?){13,16}\\b",
+    "(?i)\\b(?:dob|date of birth|ssn|passport|driver(?:'s)? license)\\b"
+  ],
+  "pii_match_threshold": 3,
+  "entropy_min_length": 24,
+  "entropy_threshold": 4.3,
+  "bulk_exfiltration_keywords": [
+    "upload all",
+    "send to external",
+    "export all users",
+    "dump customer data",
+    "bulk transfer",
+    "exfiltrate",
+    "copy database"
+  ],
   "prompt_injection_regex": [
     "\\bignore (all )?(previous|prior|earlier) instructions\\b",
     "\\bdisregard (all )?(previous|prior|earlier) instructions\\b",

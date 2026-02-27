@@ -13,9 +13,10 @@ class NoopTelemetry:
 
 
 class OTelTelemetry:
-    def __init__(self, service_name: str = "agentguard") -> None:
+    def __init__(self, service_name: str = "agentguard", otlp_endpoint: str | None = None) -> None:
         from opentelemetry import metrics, trace
         from opentelemetry.sdk.metrics import MeterProvider
+        from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
@@ -23,10 +24,25 @@ class OTelTelemetry:
         resource = Resource.create({"service.name": service_name})
 
         tracer_provider = TracerProvider(resource=resource)
-        tracer_provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
+        if otlp_endpoint:
+            from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+
+            tracer_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=f"{otlp_endpoint}/v1/traces")))
+        else:
+            tracer_provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
         trace.set_tracer_provider(tracer_provider)
 
-        meter_provider = MeterProvider(resource=resource)
+        metric_readers = []
+        if otlp_endpoint:
+            from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+
+            metric_readers.append(
+                PeriodicExportingMetricReader(
+                    OTLPMetricExporter(endpoint=f"{otlp_endpoint}/v1/metrics")
+                )
+            )
+
+        meter_provider = MeterProvider(resource=resource, metric_readers=metric_readers)
         metrics.set_meter_provider(meter_provider)
 
         self._tracer = trace.get_tracer(service_name)
@@ -36,6 +52,9 @@ class OTelTelemetry:
         )
         self._latency_hist = self._meter.create_histogram(
             "agentguard_evaluate_latency_ms", description="Decision latency in milliseconds"
+        )
+        self._risk_hist = self._meter.create_histogram(
+            "agentguard_risk_score", description="Risk score from evaluation pipeline"
         )
 
     @contextmanager
@@ -52,14 +71,18 @@ class OTelTelemetry:
         }
         self._decision_counter.add(1, attrs)
         self._latency_hist.record(elapsed_ms, attrs)
-        self._latency_hist.record(float(risk_score), {"metric": "risk_score"})
+        self._risk_hist.record(float(risk_score), attrs)
 
 
-def create_telemetry(enable_otel: bool) -> NoopTelemetry | OTelTelemetry:
+def create_telemetry(
+    enable_otel: bool,
+    service_name: str = "agentguard",
+    otlp_endpoint: str | None = None,
+) -> NoopTelemetry | OTelTelemetry:
     if not enable_otel:
         return NoopTelemetry()
 
     try:
-        return OTelTelemetry()
+        return OTelTelemetry(service_name=service_name, otlp_endpoint=otlp_endpoint)
     except Exception:
         return NoopTelemetry()

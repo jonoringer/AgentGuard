@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
+from threading import RLock
 from typing import Any
 from urllib.parse import urlparse
 
@@ -23,33 +25,51 @@ class PolicyEngine:
     }
 
     def __init__(self, policy: PolicyConfig) -> None:
+        self._lock = RLock()
         self.policy = policy
         self._agent_actions: dict[str, deque[datetime]] = defaultdict(deque)
+        self._sensitive_patterns: list[re.Pattern[str]] = []
+        self._pii_patterns: list[re.Pattern[str]] = []
+        self._prompt_injection_patterns: list[re.Pattern[str]] = []
+        self._sql_injection_patterns: list[re.Pattern[str]] = []
+        self._code_injection_patterns: list[re.Pattern[str]] = []
+        self._bulk_exfil_keywords: list[str] = []
+        self._apply_policy(policy)
+
+    def evaluate(self, action: AgentAction) -> tuple[Decision, EnforcementAction, int, float, list[str], list[RuleResult]]:
+        with self._lock:
+            reasons: list[str] = []
+            rule_results: list[RuleResult] = []
+
+            rule_results.append(self._check_tool_scope(action, reasons))
+            rule_results.append(self._check_resource_scope(action, reasons))
+            rule_results.append(self._check_payload_size(action, reasons))
+            rule_results.append(self._check_rate_limit(action, reasons))
+            rule_results.append(self._check_prompt_injection(action, reasons))
+            rule_results.append(self._check_sql_injection(action, reasons))
+            rule_results.append(self._check_code_injection(action, reasons))
+            rule_results.append(self._check_exfiltration(action, reasons))
+
+            risk_score, confidence = self._score_risk(rule_results)
+            enforcement_action = self._map_action(risk_score)
+            decision = Decision.ALLOW if enforcement_action is EnforcementAction.ALLOW else Decision.DENY
+
+            if decision is Decision.ALLOW:
+                reasons.append("Action allowed by current policy")
+            return decision, enforcement_action, risk_score, confidence, reasons, rule_results
+
+    def set_policy(self, policy: PolicyConfig) -> None:
+        with self._lock:
+            self._apply_policy(policy)
+
+    def _apply_policy(self, policy: PolicyConfig) -> None:
+        self.policy = policy
         self._sensitive_patterns = [re.compile(p, flags=re.IGNORECASE) for p in policy.sensitive_regex]
+        self._pii_patterns = [re.compile(p, flags=re.IGNORECASE) for p in policy.pii_regex]
         self._prompt_injection_patterns = [re.compile(p, flags=re.IGNORECASE) for p in policy.prompt_injection_regex]
         self._sql_injection_patterns = [re.compile(p, flags=re.IGNORECASE) for p in policy.sql_injection_regex]
         self._code_injection_patterns = [re.compile(p, flags=re.IGNORECASE) for p in policy.code_injection_regex]
-
-    def evaluate(self, action: AgentAction) -> tuple[Decision, EnforcementAction, int, float, list[str], list[RuleResult]]:
-        reasons: list[str] = []
-        rule_results: list[RuleResult] = []
-
-        rule_results.append(self._check_tool_scope(action, reasons))
-        rule_results.append(self._check_resource_scope(action, reasons))
-        rule_results.append(self._check_payload_size(action, reasons))
-        rule_results.append(self._check_rate_limit(action, reasons))
-        rule_results.append(self._check_prompt_injection(action, reasons))
-        rule_results.append(self._check_sql_injection(action, reasons))
-        rule_results.append(self._check_code_injection(action, reasons))
-        rule_results.append(self._check_exfiltration(action, reasons))
-
-        risk_score, confidence = self._score_risk(rule_results)
-        enforcement_action = self._map_action(risk_score)
-        decision = Decision.ALLOW if enforcement_action is EnforcementAction.ALLOW else Decision.DENY
-
-        if decision is Decision.ALLOW:
-            reasons.append("Action allowed by current policy")
-        return decision, enforcement_action, risk_score, confidence, reasons, rule_results
+        self._bulk_exfil_keywords = [k.lower() for k in policy.bulk_exfiltration_keywords]
 
     def _check_tool_scope(self, action: AgentAction, reasons: list[str]) -> RuleResult:
         allow_tools = self.policy.agent_allow_tools.get(action.agent_id, self.policy.default_allow_tools)
@@ -123,7 +143,7 @@ class PolicyEngine:
         return RuleResult(rule="payload_size", passed=True, message="Payload size check passed", severity=0)
 
     def _check_exfiltration(self, action: AgentAction, reasons: list[str]) -> RuleResult:
-        text = self._payload_to_text(action.payload)
+        text = self._action_to_text(action)
 
         for pattern in self._sensitive_patterns:
             if pattern.search(text):
@@ -138,7 +158,7 @@ class PolicyEngine:
 
         for token in self._extract_possible_urls(text):
             domain = urlparse(token).netloc.lower()
-            if domain in self.policy.blocked_domains:
+            if self._is_blocked_domain(domain):
                 msg = f"Payload contains blocked destination domain: {domain}"
                 reasons.append(msg)
                 return RuleResult(
@@ -147,6 +167,45 @@ class PolicyEngine:
                     message=msg,
                     severity=self._RULE_SEVERITY["exfiltration"],
                 )
+
+        pii_matches = sum(len(pattern.findall(text)) for pattern in self._pii_patterns)
+        if pii_matches >= self.policy.pii_match_threshold:
+            msg = (
+                f"Potential bulk PII exfiltration detected ({pii_matches} matches, "
+                f"threshold {self.policy.pii_match_threshold})"
+            )
+            reasons.append(msg)
+            return RuleResult(
+                rule="exfiltration",
+                passed=False,
+                message=msg,
+                severity=self._RULE_SEVERITY["exfiltration"],
+            )
+
+        if self._bulk_exfil_keywords and pii_matches > 0:
+            lower_text = text.lower()
+            if any(keyword in lower_text for keyword in self._bulk_exfil_keywords):
+                msg = "Potential data exfiltration intent detected with PII and transfer keywords"
+                reasons.append(msg)
+                return RuleResult(
+                    rule="exfiltration",
+                    passed=False,
+                    message=msg,
+                    severity=self._RULE_SEVERITY["exfiltration"],
+                )
+
+        entropy_hits = self._detect_high_entropy_tokens(text)
+        if entropy_hits:
+            msg = (
+                f"Potential token/secret exfiltration detected (high-entropy token: {entropy_hits[0][:8]}...)"
+            )
+            reasons.append(msg)
+            return RuleResult(
+                rule="exfiltration",
+                passed=False,
+                message=msg,
+                severity=self._RULE_SEVERITY["exfiltration"],
+            )
 
         return RuleResult(rule="exfiltration", passed=True, message="No exfiltration indicators detected", severity=0)
 
@@ -235,6 +294,39 @@ class PolicyEngine:
             self._payload_to_text(action.metadata),
         ]
         return "\n".join(parts)
+
+    def _is_blocked_domain(self, domain: str) -> bool:
+        if not domain:
+            return False
+        domain = domain.split(":")[0]
+        for blocked in self.policy.blocked_domains:
+            value = blocked.lower()
+            if domain == value or domain.endswith(f".{value}"):
+                return True
+        return False
+
+    def _detect_high_entropy_tokens(self, text: str) -> list[str]:
+        tokens = re.findall(r"[A-Za-z0-9+/=_-]{%d,}" % self.policy.entropy_min_length, text)
+        suspicious: list[str] = []
+        for token in tokens:
+            entropy = self._shannon_entropy(token)
+            if entropy >= self.policy.entropy_threshold:
+                suspicious.append(token)
+        return suspicious
+
+    @staticmethod
+    def _shannon_entropy(value: str) -> float:
+        if not value:
+            return 0.0
+        counts: dict[str, int] = {}
+        for ch in value:
+            counts[ch] = counts.get(ch, 0) + 1
+        entropy = 0.0
+        length = len(value)
+        for count in counts.values():
+            p = count / length
+            entropy -= p * math.log2(p)
+        return entropy
 
     def _score_risk(self, rule_results: list[RuleResult]) -> tuple[int, float]:
         failed = [result for result in rule_results if not result.passed]

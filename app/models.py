@@ -68,6 +68,37 @@ class PolicyConfig(BaseModel):
     max_payload_bytes: int = 50_000
     blocked_domains: list[str] = Field(default_factory=list)
     sensitive_regex: list[str] = Field(default_factory=list)
+    pii_regex: list[str] = Field(default_factory=list)
+    pii_match_threshold: int = 3
+    entropy_min_length: int = 20
+    entropy_threshold: float = 4.2
+    bulk_exfiltration_keywords: list[str] = Field(default_factory=list)
     prompt_injection_regex: list[str] = Field(default_factory=list)
     sql_injection_regex: list[str] = Field(default_factory=list)
     code_injection_regex: list[str] = Field(default_factory=list)
+
+
+class PolicyVersionSummary(BaseModel):
+    version: int
+    status: str
+    created_at: datetime
+    created_by: str
+    approved_by: str | None = None
+
+
+class PolicyCurrentResponse(BaseModel):
+    version: int
+    status: str
+    policy: PolicyConfig
+    created_at: datetime
+    created_by: str
+    approved_by: str | None = None
+
+
+class PolicyProposeRequest(BaseModel):
+    policy: PolicyConfig
+    actor: str = Field(..., min_length=1)
+
+
+class PolicyApproveRequest(BaseModel):
+    actor: str = Field(..., min_length=1)

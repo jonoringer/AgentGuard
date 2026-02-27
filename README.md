@@ -36,7 +36,10 @@ AgentGuard currently provides:
   - `GET /v1/audit/logs`: query recent decisions
   - `GET /v1/audit/stream`: subscribe to real-time decision events (SSE)
   - persistent SQLite-backed audit storage
-  - optional OpenTelemetry instrumentation for evaluation paths
+  - optional OpenTelemetry instrumentation with OTLP export
+- Security controls:
+  - API key authn/authz (viewer/operator/admin roles)
+  - policy versioning with propose/approve workflow
 
 ## How it works
 
@@ -183,6 +186,25 @@ Enable OpenTelemetry instrumentation:
 export AGENTGUARD_ENABLE_OTEL=true
 ```
 
+Export OpenTelemetry to OTLP collector:
+
+```bash
+export AGENTGUARD_OTEL_ENDPOINT=http://localhost:4318
+export AGENTGUARD_SERVICE_NAME=agentguard-prod
+```
+
+Enable API key authn/authz:
+
+```bash
+export AGENTGUARD_API_KEYS='viewer-key:viewer,operator-key:operator,admin-key:admin'
+```
+
+Policy version database path:
+
+```bash
+export AGENTGUARD_POLICY_DB=/absolute/path/to/agentguard_policy.db
+```
+
 Key policy fields:
 
 - `default_allow_tools`: tools allowed if no agent-specific allowlist is set
@@ -224,6 +246,44 @@ Put AgentGuard inline in your agent execution flow:
 4. If `decision == deny`, return a policy error to the agent and stop execution.
 5. Send audit logs to your SIEM/SOC pipeline.
 
+## Policy governance endpoints
+
+- `GET /v1/policy/current`: fetch current approved policy version
+- `GET /v1/policy/versions`: list policy history
+- `POST /v1/policy/propose`: submit proposed policy (admin)
+- `POST /v1/policy/{version}/approve`: approve proposed version and make active (admin)
+
+Example proposal:
+
+```bash
+curl -s http://127.0.0.1:8080/v1/policy/propose \
+  -X POST \
+  -H 'x-api-key: admin-key' \
+  -H 'content-type: application/json' \
+  -d '{
+    "actor": "security-admin",
+    "policy": {
+      "default_allow_tools": ["read_file"],
+      "default_deny_tools": ["exec_shell"],
+      "agent_allow_tools": {},
+      "agent_deny_tools": {},
+      "resource_prefix_allowlist": {},
+      "rate_limit_per_minute": 20,
+      "max_payload_bytes": 20000,
+      "blocked_domains": ["pastebin.com"],
+      "sensitive_regex": [],
+      "pii_regex": [],
+      "pii_match_threshold": 3,
+      "entropy_min_length": 24,
+      "entropy_threshold": 4.3,
+      "bulk_exfiltration_keywords": [],
+      "prompt_injection_regex": [],
+      "sql_injection_regex": [],
+      "code_injection_regex": []
+    }
+  }' | jq
+```
+
 ## Testing
 
 ```bash
@@ -232,8 +292,8 @@ python -m unittest discover -s tests -v
 
 ## Current limitations
 
-- Exfiltration detection is heuristic-based (not full DLP)
-- No authn/authz layer on API endpoints yet
-- OpenTelemetry export is local/no-op unless OTel dependencies are installed and configured
+- DLP is rule-based and not yet integrated with enterprise DLP classifiers/providers
+- Auth currently supports API key roles; OIDC/SAML and fine-grained tenant RBAC are not yet implemented
+- OTel export requires collector/network configuration in the deployment environment
 
-For production, add persistent storage, authentication, and policy change controls.
+For production hardening, add managed Postgres, OIDC/SAML auth, and tenant-scoped governance controls.
