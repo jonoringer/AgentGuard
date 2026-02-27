@@ -55,3 +55,5 @@ class PolicyConfig(BaseModel):
     blocked_domains: list[str] = Field(default_factory=list)
     sensitive_regex: list[str] = Field(default_factory=list)
     prompt_injection_regex: list[str] = Field(default_factory=list)
+    sql_injection_regex: list[str] = Field(default_factory=list)
+    code_injection_regex: list[str] = Field(default_factory=list)

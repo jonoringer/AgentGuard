@@ -174,6 +174,8 @@ Key policy fields:
 - `blocked_domains`: deny if payload references these destinations
 - `sensitive_regex`: patterns for API keys, private keys, bearer tokens, etc.
 - `prompt_injection_regex`: deny patterns for instruction hijacking, jailbreaks, and exfiltration prompts
+- `sql_injection_regex`: deny patterns for SQLi primitives, stacked queries, and DB metadata extraction
+- `code_injection_regex`: deny patterns for shell/code/template/path traversal/SSRF-style injection primitives
 
 Example policy fragment:
 

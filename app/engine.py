@@ -16,6 +16,8 @@ class PolicyEngine:
         self._agent_actions: dict[str, deque[datetime]] = defaultdict(deque)
         self._sensitive_patterns = [re.compile(p, flags=re.IGNORECASE) for p in policy.sensitive_regex]
         self._prompt_injection_patterns = [re.compile(p, flags=re.IGNORECASE) for p in policy.prompt_injection_regex]
+        self._sql_injection_patterns = [re.compile(p, flags=re.IGNORECASE) for p in policy.sql_injection_regex]
+        self._code_injection_patterns = [re.compile(p, flags=re.IGNORECASE) for p in policy.code_injection_regex]
 
     def evaluate(self, action: AgentAction) -> tuple[Decision, list[str], list[RuleResult]]:
         reasons: list[str] = []
@@ -26,6 +28,8 @@ class PolicyEngine:
         rule_results.append(self._check_payload_size(action, reasons))
         rule_results.append(self._check_rate_limit(action, reasons))
         rule_results.append(self._check_prompt_injection(action, reasons))
+        rule_results.append(self._check_sql_injection(action, reasons))
+        rule_results.append(self._check_code_injection(action, reasons))
         rule_results.append(self._check_exfiltration(action, reasons))
 
         decision = Decision.DENY if reasons else Decision.ALLOW
@@ -124,6 +128,32 @@ class PolicyEngine:
                 return RuleResult(rule="prompt_injection", passed=False, message=msg)
 
         return RuleResult(rule="prompt_injection", passed=True, message="No prompt injection indicators detected")
+
+    def _check_sql_injection(self, action: AgentAction, reasons: list[str]) -> RuleResult:
+        if not self._sql_injection_patterns:
+            return RuleResult(rule="sql_injection", passed=True, message="No SQL injection patterns configured")
+
+        text = self._action_to_text(action)
+        for pattern in self._sql_injection_patterns:
+            if pattern.search(text):
+                msg = f"Potential SQL injection detected by pattern: {pattern.pattern}"
+                reasons.append(msg)
+                return RuleResult(rule="sql_injection", passed=False, message=msg)
+
+        return RuleResult(rule="sql_injection", passed=True, message="No SQL injection indicators detected")
+
+    def _check_code_injection(self, action: AgentAction, reasons: list[str]) -> RuleResult:
+        if not self._code_injection_patterns:
+            return RuleResult(rule="code_injection", passed=True, message="No code injection patterns configured")
+
+        text = self._action_to_text(action)
+        for pattern in self._code_injection_patterns:
+            if pattern.search(text):
+                msg = f"Potential code injection detected by pattern: {pattern.pattern}"
+                reasons.append(msg)
+                return RuleResult(rule="code_injection", passed=False, message=msg)
+
+        return RuleResult(rule="code_injection", passed=True, message="No code injection indicators detected")
 
     @staticmethod
     def _payload_to_text(payload: Any) -> str:
