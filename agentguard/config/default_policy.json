@@ -1,0 +1,24 @@
+{
+  "default_allow_tools": ["read_file", "list_files", "search_code", "http_get"],
+  "default_deny_tools": ["exec_shell", "write_secret_store"],
+  "agent_allow_tools": {
+    "build-bot": ["read_file", "list_files", "search_code", "run_tests"]
+  },
+  "agent_deny_tools": {
+    "build-bot": ["exec_shell"],
+    "research-bot": ["exec_shell", "git_push"]
+  },
+  "resource_prefix_allowlist": {
+    "build-bot": ["/workspace/repo", "./src"],
+    "research-bot": ["https://docs.mycompany.com"]
+  },
+  "rate_limit_per_minute": 30,
+  "max_payload_bytes": 20000,
+  "blocked_domains": ["pastebin.com", "transfer.sh", "mega.nz"],
+  "sensitive_regex": [
+    "AKIA[0-9A-Z]{16}",
+    "-----BEGIN (RSA|EC|OPENSSH) PRIVATE KEY-----",
+    "(?i)api[_-]?key\\s*[:=]\\s*[A-Za-z0-9_\\-]{16,}",
+    "(?i)bearer\\s+[A-Za-z0-9_\\-.=]{16,}"
+  ]
+}
