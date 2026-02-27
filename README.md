@@ -39,6 +39,8 @@ AgentGuard currently provides:
   - optional OpenTelemetry instrumentation with OTLP export
 - Security controls:
   - API key authn/authz (viewer/operator/admin roles)
+  - optional OIDC JWT auth (issuer/audience/JWKS)
+  - tenant-scoped role enforcement
   - policy versioning with propose/approve workflow
 
 ## How it works
@@ -198,11 +200,33 @@ Enable API key authn/authz:
 ```bash
 export AGENTGUARD_API_KEYS='viewer-key:viewer,operator-key:operator,admin-key:admin'
 ```
+Tenant-scoped API keys:
+
+```bash
+export AGENTGUARD_API_KEYS='viewer-key:viewer:tenant-a,operator-key:operator:tenant-a,admin-key:admin'
+```
+
+Enable OIDC auth (JWT + JWKS):
+
+```bash
+export AGENTGUARD_OIDC_ISSUER='https://issuer.example.com'
+export AGENTGUARD_OIDC_AUDIENCE='agentguard-api'
+export AGENTGUARD_OIDC_JWKS_URL='https://issuer.example.com/.well-known/jwks.json'
+export AGENTGUARD_OIDC_ROLE_CLAIM='role'
+export AGENTGUARD_OIDC_TENANT_CLAIM='tenant_id'
+```
 
 Policy version database path:
 
 ```bash
 export AGENTGUARD_POLICY_DB=/absolute/path/to/agentguard_policy.db
+```
+
+Use PostgreSQL for audit/policy stores (managed DB ready):
+
+```bash
+export AGENTGUARD_AUDIT_DB='postgresql://user:pass@host:5432/agentguard'
+export AGENTGUARD_POLICY_DB='postgresql://user:pass@host:5432/agentguard'
 ```
 
 Key policy fields:
@@ -292,8 +316,8 @@ python -m unittest discover -s tests -v
 
 ## Current limitations
 
-- DLP is rule-based and not yet integrated with enterprise DLP classifiers/providers
-- Auth currently supports API key roles; OIDC/SAML and fine-grained tenant RBAC are not yet implemented
-- OTel export requires collector/network configuration in the deployment environment
+- DLP supports rule-based checks and optional external HTTP provider integration; native enterprise provider SDKs are not yet built
+- OIDC JWT auth is supported; full SAML/SCIM enterprise identity integration is not yet built
+- OTLP export works when collector/network configuration is present in deployment
 
-For production hardening, add managed Postgres, OIDC/SAML auth, and tenant-scoped governance controls.
+For production hardening, run with managed Postgres, OIDC identity, and tenant-scoped governance defaults enabled.

@@ -9,6 +9,7 @@ from threading import RLock
 from typing import Any
 from urllib.parse import urlparse
 
+from .dlp import BaseDLPProvider
 from .models import AgentAction, Decision, EnforcementAction, PolicyConfig, RuleResult
 
 
@@ -24,9 +25,10 @@ class PolicyEngine:
         "exfiltration": 85,
     }
 
-    def __init__(self, policy: PolicyConfig) -> None:
+    def __init__(self, policy: PolicyConfig, dlp_provider: BaseDLPProvider | None = None) -> None:
         self._lock = RLock()
         self.policy = policy
+        self._dlp_provider = dlp_provider or BaseDLPProvider()
         self._agent_actions: dict[str, deque[datetime]] = defaultdict(deque)
         self._sensitive_patterns: list[re.Pattern[str]] = []
         self._pii_patterns: list[re.Pattern[str]] = []
@@ -61,6 +63,10 @@ class PolicyEngine:
     def set_policy(self, policy: PolicyConfig) -> None:
         with self._lock:
             self._apply_policy(policy)
+
+    def set_dlp_provider(self, provider: BaseDLPProvider) -> None:
+        with self._lock:
+            self._dlp_provider = provider
 
     def _apply_policy(self, policy: PolicyConfig) -> None:
         self.policy = policy
@@ -144,6 +150,16 @@ class PolicyEngine:
 
     def _check_exfiltration(self, action: AgentAction, reasons: list[str]) -> RuleResult:
         text = self._action_to_text(action)
+
+        for finding in self._dlp_provider.inspect(text=text, tenant_id=action.tenant_id):
+            msg = f"Enterprise DLP provider match ({finding.category}): {finding.detail}"
+            reasons.append(msg)
+            return RuleResult(
+                rule="exfiltration",
+                passed=False,
+                message=msg,
+                severity=min(100, max(self._RULE_SEVERITY["exfiltration"], finding.severity)),
+            )
 
         for pattern in self._sensitive_patterns:
             if pattern.search(text):

@@ -20,6 +20,7 @@ class EnforcementAction(str, Enum):
 
 
 class AgentAction(BaseModel):
+    tenant_id: str | None = None
     agent_id: str = Field(..., min_length=1)
     tool: str = Field(..., min_length=1)
     operation: str | None = None
@@ -79,6 +80,7 @@ class PolicyConfig(BaseModel):
 
 
 class PolicyVersionSummary(BaseModel):
+    tenant_id: str
     version: int
     status: str
     created_at: datetime
@@ -87,6 +89,7 @@ class PolicyVersionSummary(BaseModel):
 
 
 class PolicyCurrentResponse(BaseModel):
+    tenant_id: str
     version: int
     status: str
     policy: PolicyConfig
@@ -96,9 +99,11 @@ class PolicyCurrentResponse(BaseModel):
 
 
 class PolicyProposeRequest(BaseModel):
+    tenant_id: str = Field(..., min_length=1)
     policy: PolicyConfig
     actor: str = Field(..., min_length=1)
 
 
 class PolicyApproveRequest(BaseModel):
+    tenant_id: str = Field(..., min_length=1)
     actor: str = Field(..., min_length=1)

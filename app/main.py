@@ -7,7 +7,8 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from .audit import AuditStore
-from .auth import Role, load_auth_manager
+from .auth import AuthContext, Role, load_auth_manager
+from .dlp import load_dlp_provider
 from .engine import PolicyEngine
 from .models import (
     AgentAction,
@@ -39,12 +40,30 @@ def create_app() -> FastAPI:
     service_name = os.getenv("AGENTGUARD_SERVICE_NAME", "agentguard")
     bootstrap_policy = load_policy(policy_path)
     policy_store = PolicyStore(db_path=policy_db_path)
-    policy_store.ensure_seed(bootstrap_policy, actor="bootstrap")
-    current_policy = policy_store.get_current().policy
-    engine = PolicyEngine(current_policy)
+    policy_store.ensure_seed(bootstrap_policy, tenant_id="global", actor="bootstrap")
+    dlp_provider = load_dlp_provider()
+    tenant_engines: dict[str, PolicyEngine] = {
+        "global": PolicyEngine(policy_store.get_current(tenant_id="global").policy, dlp_provider=dlp_provider)
+    }
     audit = AuditStore(db_path=audit_db_path)
     telemetry = create_telemetry(enable_otel=enable_otel, service_name=service_name, otlp_endpoint=otlp_endpoint)
     auth = load_auth_manager()
+
+    def _resolve_tenant(auth_context: AuthContext, requested_tenant: str | None) -> str:
+        if auth_context.role is Role.ADMIN and not auth_context.tenant_id:
+            return requested_tenant or "global"
+        if auth_context.tenant_id:
+            if requested_tenant and requested_tenant != auth_context.tenant_id:
+                raise HTTPException(status_code=403, detail="Cross-tenant access denied")
+            return auth_context.tenant_id
+        return requested_tenant or "global"
+
+    def _ensure_tenant_policy(tenant_id: str) -> None:
+        try:
+            policy_store.get_current(tenant_id=tenant_id)
+        except RuntimeError:
+            global_policy = policy_store.get_current(tenant_id="global").policy
+            policy_store.ensure_seed(global_policy, tenant_id=tenant_id, actor="tenant-bootstrap")
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -53,8 +72,20 @@ def create_app() -> FastAPI:
     @app.post("/v1/guard/evaluate", response_model=EvaluationResponse)
     def evaluate(
         action: AgentAction,
-        _auth=Depends(auth.require_role(Role.OPERATOR)),
+        auth_context: AuthContext = Depends(auth.require_role(Role.OPERATOR)),
     ) -> EvaluationResponse:
+        action.tenant_id = _resolve_tenant(auth_context, action.tenant_id)
+        tenant = action.tenant_id or "global"
+        _ensure_tenant_policy(tenant)
+        if tenant not in tenant_engines:
+            try:
+                tenant_policy = policy_store.get_current(tenant_id=tenant).policy
+            except RuntimeError:
+                tenant_policy = policy_store.get_current(tenant_id="global").policy
+            tenant_engines[tenant] = PolicyEngine(tenant_policy, dlp_provider=dlp_provider)
+
+        engine = tenant_engines[tenant]
+
         started = time.perf_counter()
         with telemetry.evaluate_span(action.agent_id, action.tool):
             decision, enforcement_action, risk_score, confidence, reasons, rule_results = engine.evaluate(action)
@@ -92,9 +123,11 @@ def create_app() -> FastAPI:
         agent_id: str | None = Query(default=None),
         decision: Decision | None = Query(default=None),
         limit: int = Query(default=100, ge=1, le=1000),
-        _auth=Depends(auth.require_role(Role.VIEWER)),
+        tenant_id: str | None = Query(default=None),
+        auth_context: AuthContext = Depends(auth.require_role(Role.VIEWER)),
     ) -> list[AuditRecord]:
-        return audit.query(agent_id=agent_id, decision=decision, limit=limit)
+        resolved_tenant = _resolve_tenant(auth_context, tenant_id)
+        return audit.query(agent_id=agent_id, decision=decision, limit=limit, tenant_id=resolved_tenant)
 
     @app.get("/v1/audit/stream")
     async def stream_logs(_auth=Depends(auth.require_role(Role.VIEWER))) -> StreamingResponse:
@@ -106,35 +139,53 @@ def create_app() -> FastAPI:
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
     @app.get("/v1/policy/current", response_model=PolicyCurrentResponse)
-    def current_policy(_auth=Depends(auth.require_role(Role.VIEWER))) -> PolicyCurrentResponse:
-        return policy_store.get_current()
+    def current_policy(
+        tenant_id: str | None = Query(default=None),
+        auth_context: AuthContext = Depends(auth.require_role(Role.VIEWER)),
+    ) -> PolicyCurrentResponse:
+        resolved_tenant = _resolve_tenant(auth_context, tenant_id)
+        _ensure_tenant_policy(resolved_tenant)
+        return policy_store.get_current(tenant_id=resolved_tenant)
 
     @app.get("/v1/policy/versions", response_model=list[PolicyVersionSummary])
     def policy_versions(
         limit: int = Query(default=100, ge=1, le=1000),
-        _auth=Depends(auth.require_role(Role.VIEWER)),
+        tenant_id: str | None = Query(default=None),
+        auth_context: AuthContext = Depends(auth.require_role(Role.VIEWER)),
     ) -> list[PolicyVersionSummary]:
-        return policy_store.list_versions(limit=limit)
+        resolved_tenant = _resolve_tenant(auth_context, tenant_id)
+        _ensure_tenant_policy(resolved_tenant)
+        return policy_store.list_versions(tenant_id=resolved_tenant, limit=limit)
 
     @app.post("/v1/policy/propose", response_model=PolicyVersionSummary)
     def propose_policy(
         request: PolicyProposeRequest,
-        _auth=Depends(auth.require_role(Role.ADMIN)),
+        auth_context: AuthContext = Depends(auth.require_role(Role.ADMIN)),
     ) -> PolicyVersionSummary:
-        return policy_store.propose(request.policy, actor=request.actor)
+        tenant = _resolve_tenant(auth_context, request.tenant_id)
+        return policy_store.propose(tenant_id=tenant, policy=request.policy, actor=request.actor)
 
     @app.post("/v1/policy/{version}/approve", response_model=PolicyCurrentResponse)
     def approve_policy(
         version: int,
         request: PolicyApproveRequest,
-        _auth=Depends(auth.require_role(Role.ADMIN)),
+        auth_context: AuthContext = Depends(auth.require_role(Role.ADMIN)),
     ) -> PolicyCurrentResponse:
+        tenant = _resolve_tenant(auth_context, request.tenant_id)
         try:
-            approved = policy_store.approve(version, actor=request.actor)
+            approved = policy_store.approve(tenant_id=tenant, version=version, actor=request.actor)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        engine.set_policy(approved.policy)
+        if tenant in tenant_engines:
+            tenant_engines[tenant].set_policy(approved.policy)
+        else:
+            tenant_engines[tenant] = PolicyEngine(approved.policy, dlp_provider=dlp_provider)
         return approved
+
+    @app.on_event("shutdown")
+    def shutdown() -> None:
+        audit.close()
+        policy_store.close()
 
     return app
 
