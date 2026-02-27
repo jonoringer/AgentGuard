@@ -35,6 +35,8 @@ AgentGuard currently provides:
 - Audit and observability:
   - `GET /v1/audit/logs`: query recent decisions
   - `GET /v1/audit/stream`: subscribe to real-time decision events (SSE)
+  - persistent SQLite-backed audit storage
+  - optional OpenTelemetry instrumentation for evaluation paths
 
 ## How it works
 
@@ -52,7 +54,8 @@ app/
   engine.py    # Policy enforcement engine
   models.py    # Request/response and policy data models
   policy.py    # Policy file loading
-  audit.py     # In-memory audit store + SSE fanout
+  audit.py     # Persistent SQLite audit store + SSE fanout
+  telemetry.py # Optional OpenTelemetry hooks
 config/
   default_policy.json
 tests/
@@ -168,6 +171,18 @@ You can override the policy file path:
 export AGENTGUARD_POLICY=/absolute/path/to/policy.json
 ```
 
+Audit database path (SQLite):
+
+```bash
+export AGENTGUARD_AUDIT_DB=/absolute/path/to/agentguard_audit.db
+```
+
+Enable OpenTelemetry instrumentation:
+
+```bash
+export AGENTGUARD_ENABLE_OTEL=true
+```
+
 Key policy fields:
 
 - `default_allow_tools`: tools allowed if no agent-specific allowlist is set
@@ -217,8 +232,8 @@ python -m unittest discover -s tests -v
 
 ## Current limitations
 
-- Audit storage is in-memory (non-persistent)
 - Exfiltration detection is heuristic-based (not full DLP)
 - No authn/authz layer on API endpoints yet
+- OpenTelemetry export is local/no-op unless OTel dependencies are installed and configured
 
 For production, add persistent storage, authentication, and policy change controls.

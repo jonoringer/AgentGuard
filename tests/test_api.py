@@ -1,4 +1,6 @@
 import unittest
+import os
+import tempfile
 
 from fastapi.testclient import TestClient
 
@@ -7,7 +9,13 @@ from app.main import create_app
 
 class ApiTests(unittest.TestCase):
     def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory()
+        os.environ["AGENTGUARD_AUDIT_DB"] = f"{self._tmpdir.name}/audit.db"
         self.client = TestClient(create_app())
+
+    def tearDown(self) -> None:
+        os.environ.pop("AGENTGUARD_AUDIT_DB", None)
+        self._tmpdir.cleanup()
 
     def test_evaluate_endpoint_and_audit_log(self) -> None:
         response = self.client.post(
