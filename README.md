@@ -10,6 +10,16 @@ This tool is built for teams deploying agents in real systems, especially enterp
 
 Teams use AgentGuard to reduce the blast radius of prompt injection, malicious tool outputs, compromised skills, and accidental overreach by highly capable agents. Instead of relying on trust alone, you get explicit policy enforcement, scoped permissions, rate controls, and investigation-ready logs that can feed security monitoring workflows. The result is safer agent autonomy without slowing delivery velocity. 🤖
 
+## Documentation map
+
+- Documentation index: [`docs/README.md`](/Users/jonoringer/Documents/New project/docs/README.md)
+- Deployment and production config: [`docs/deployment.md`](/Users/jonoringer/Documents/New project/docs/deployment.md)
+- API reference: [`docs/api-reference.md`](/Users/jonoringer/Documents/New project/docs/api-reference.md)
+- Policy examples: [`docs/policy-cookbook.md`](/Users/jonoringer/Documents/New project/docs/policy-cookbook.md)
+- Identity and access: [`docs/identity.md`](/Users/jonoringer/Documents/New project/docs/identity.md)
+- Operations runbook: [`docs/operations-runbook.md`](/Users/jonoringer/Documents/New project/docs/operations-runbook.md)
+- Production env template: [`/.env.production.example`](/Users/jonoringer/Documents/New project/.env.production.example)
+
 ## Why it exists
 
 Modern agents can:
@@ -66,6 +76,15 @@ app/
   telemetry.py # Optional OpenTelemetry hooks
 config/
   default_policy.json
+docs/
+  README.md
+  deployment.md
+  api-reference.md
+  policy-cookbook.md
+  identity.md
+  operations-runbook.md
+scripts/
+  migrate_stores.py
 tests/
   test_engine.py
   test_api.py
