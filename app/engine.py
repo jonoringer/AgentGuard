@@ -7,10 +7,21 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlparse
 
-from .models import AgentAction, Decision, PolicyConfig, RuleResult
+from .models import AgentAction, Decision, EnforcementAction, PolicyConfig, RuleResult
 
 
 class PolicyEngine:
+    _RULE_SEVERITY = {
+        "tool_scope": 45,
+        "resource_scope": 35,
+        "payload_size": 20,
+        "rate_limit": 25,
+        "prompt_injection": 80,
+        "sql_injection": 90,
+        "code_injection": 90,
+        "exfiltration": 85,
+    }
+
     def __init__(self, policy: PolicyConfig) -> None:
         self.policy = policy
         self._agent_actions: dict[str, deque[datetime]] = defaultdict(deque)
@@ -19,7 +30,7 @@ class PolicyEngine:
         self._sql_injection_patterns = [re.compile(p, flags=re.IGNORECASE) for p in policy.sql_injection_regex]
         self._code_injection_patterns = [re.compile(p, flags=re.IGNORECASE) for p in policy.code_injection_regex]
 
-    def evaluate(self, action: AgentAction) -> tuple[Decision, list[str], list[RuleResult]]:
+    def evaluate(self, action: AgentAction) -> tuple[Decision, EnforcementAction, int, float, list[str], list[RuleResult]]:
         reasons: list[str] = []
         rule_results: list[RuleResult] = []
 
@@ -32,10 +43,13 @@ class PolicyEngine:
         rule_results.append(self._check_code_injection(action, reasons))
         rule_results.append(self._check_exfiltration(action, reasons))
 
-        decision = Decision.DENY if reasons else Decision.ALLOW
+        risk_score, confidence = self._score_risk(rule_results)
+        enforcement_action = self._map_action(risk_score)
+        decision = Decision.ALLOW if enforcement_action is EnforcementAction.ALLOW else Decision.DENY
+
         if decision is Decision.ALLOW:
             reasons.append("Action allowed by current policy")
-        return decision, reasons, rule_results
+        return decision, enforcement_action, risk_score, confidence, reasons, rule_results
 
     def _check_tool_scope(self, action: AgentAction, reasons: list[str]) -> RuleResult:
         allow_tools = self.policy.agent_allow_tools.get(action.agent_id, self.policy.default_allow_tools)
@@ -44,14 +58,14 @@ class PolicyEngine:
         if action.tool in deny_tools:
             msg = f"Tool '{action.tool}' is explicitly denied"
             reasons.append(msg)
-            return RuleResult(rule="tool_scope", passed=False, message=msg)
+            return RuleResult(rule="tool_scope", passed=False, message=msg, severity=self._RULE_SEVERITY["tool_scope"])
 
         if allow_tools and action.tool not in allow_tools:
             msg = f"Tool '{action.tool}' is not in allowlist"
             reasons.append(msg)
-            return RuleResult(rule="tool_scope", passed=False, message=msg)
+            return RuleResult(rule="tool_scope", passed=False, message=msg, severity=self._RULE_SEVERITY["tool_scope"])
 
-        return RuleResult(rule="tool_scope", passed=True, message="Tool scope check passed")
+        return RuleResult(rule="tool_scope", passed=True, message="Tool scope check passed", severity=0)
 
     def _check_resource_scope(self, action: AgentAction, reasons: list[str]) -> RuleResult:
         if not action.resource:
@@ -66,7 +80,12 @@ class PolicyEngine:
 
         msg = f"Resource '{action.resource}' is outside allowed scope"
         reasons.append(msg)
-        return RuleResult(rule="resource_scope", passed=False, message=msg)
+        return RuleResult(
+            rule="resource_scope",
+            passed=False,
+            message=msg,
+            severity=self._RULE_SEVERITY["resource_scope"],
+        )
 
     def _check_rate_limit(self, action: AgentAction, reasons: list[str]) -> RuleResult:
         now = datetime.now(timezone.utc)
@@ -82,10 +101,10 @@ class PolicyEngine:
                 f"({self.policy.rate_limit_per_minute}/minute)"
             )
             reasons.append(msg)
-            return RuleResult(rule="rate_limit", passed=False, message=msg)
+            return RuleResult(rule="rate_limit", passed=False, message=msg, severity=self._RULE_SEVERITY["rate_limit"])
 
         actions.append(now)
-        return RuleResult(rule="rate_limit", passed=True, message="Rate limit check passed")
+        return RuleResult(rule="rate_limit", passed=True, message="Rate limit check passed", severity=0)
 
     def _check_payload_size(self, action: AgentAction, reasons: list[str]) -> RuleResult:
         payload_size = len(self._payload_to_text(action.payload).encode("utf-8"))
@@ -95,8 +114,13 @@ class PolicyEngine:
                 f"Max allowed is {self.policy.max_payload_bytes} bytes"
             )
             reasons.append(msg)
-            return RuleResult(rule="payload_size", passed=False, message=msg)
-        return RuleResult(rule="payload_size", passed=True, message="Payload size check passed")
+            return RuleResult(
+                rule="payload_size",
+                passed=False,
+                message=msg,
+                severity=self._RULE_SEVERITY["payload_size"],
+            )
+        return RuleResult(rule="payload_size", passed=True, message="Payload size check passed", severity=0)
 
     def _check_exfiltration(self, action: AgentAction, reasons: list[str]) -> RuleResult:
         text = self._payload_to_text(action.payload)
@@ -105,16 +129,26 @@ class PolicyEngine:
             if pattern.search(text):
                 msg = f"Potential sensitive data detected by pattern: {pattern.pattern}"
                 reasons.append(msg)
-                return RuleResult(rule="exfiltration", passed=False, message=msg)
+                return RuleResult(
+                    rule="exfiltration",
+                    passed=False,
+                    message=msg,
+                    severity=self._RULE_SEVERITY["exfiltration"],
+                )
 
         for token in self._extract_possible_urls(text):
             domain = urlparse(token).netloc.lower()
             if domain in self.policy.blocked_domains:
                 msg = f"Payload contains blocked destination domain: {domain}"
                 reasons.append(msg)
-                return RuleResult(rule="exfiltration", passed=False, message=msg)
+                return RuleResult(
+                    rule="exfiltration",
+                    passed=False,
+                    message=msg,
+                    severity=self._RULE_SEVERITY["exfiltration"],
+                )
 
-        return RuleResult(rule="exfiltration", passed=True, message="No exfiltration indicators detected")
+        return RuleResult(rule="exfiltration", passed=True, message="No exfiltration indicators detected", severity=0)
 
     def _check_prompt_injection(self, action: AgentAction, reasons: list[str]) -> RuleResult:
         if not self._prompt_injection_patterns:
@@ -125,9 +159,19 @@ class PolicyEngine:
             if pattern.search(text):
                 msg = f"Potential prompt injection detected by pattern: {pattern.pattern}"
                 reasons.append(msg)
-                return RuleResult(rule="prompt_injection", passed=False, message=msg)
+                return RuleResult(
+                    rule="prompt_injection",
+                    passed=False,
+                    message=msg,
+                    severity=self._RULE_SEVERITY["prompt_injection"],
+                )
 
-        return RuleResult(rule="prompt_injection", passed=True, message="No prompt injection indicators detected")
+        return RuleResult(
+            rule="prompt_injection",
+            passed=True,
+            message="No prompt injection indicators detected",
+            severity=0,
+        )
 
     def _check_sql_injection(self, action: AgentAction, reasons: list[str]) -> RuleResult:
         if not self._sql_injection_patterns:
@@ -138,9 +182,14 @@ class PolicyEngine:
             if pattern.search(text):
                 msg = f"Potential SQL injection detected by pattern: {pattern.pattern}"
                 reasons.append(msg)
-                return RuleResult(rule="sql_injection", passed=False, message=msg)
+                return RuleResult(
+                    rule="sql_injection",
+                    passed=False,
+                    message=msg,
+                    severity=self._RULE_SEVERITY["sql_injection"],
+                )
 
-        return RuleResult(rule="sql_injection", passed=True, message="No SQL injection indicators detected")
+        return RuleResult(rule="sql_injection", passed=True, message="No SQL injection indicators detected", severity=0)
 
     def _check_code_injection(self, action: AgentAction, reasons: list[str]) -> RuleResult:
         if not self._code_injection_patterns:
@@ -151,9 +200,19 @@ class PolicyEngine:
             if pattern.search(text):
                 msg = f"Potential code injection detected by pattern: {pattern.pattern}"
                 reasons.append(msg)
-                return RuleResult(rule="code_injection", passed=False, message=msg)
+                return RuleResult(
+                    rule="code_injection",
+                    passed=False,
+                    message=msg,
+                    severity=self._RULE_SEVERITY["code_injection"],
+                )
 
-        return RuleResult(rule="code_injection", passed=True, message="No code injection indicators detected")
+        return RuleResult(
+            rule="code_injection",
+            passed=True,
+            message="No code injection indicators detected",
+            severity=0,
+        )
 
     @staticmethod
     def _payload_to_text(payload: Any) -> str:
@@ -176,3 +235,35 @@ class PolicyEngine:
             self._payload_to_text(action.metadata),
         ]
         return "\n".join(parts)
+
+    def _score_risk(self, rule_results: list[RuleResult]) -> tuple[int, float]:
+        failed = [result for result in rule_results if not result.passed]
+        if not failed:
+            return 0, 0.95
+
+        # Weighted blend: strongest failing rule + diminishing contribution of others.
+        severities = sorted((result.severity for result in failed), reverse=True)
+        score = severities[0]
+        for idx, value in enumerate(severities[1:], start=1):
+            score += value / (idx + 1)
+        risk_score = min(100, int(round(score)))
+
+        if risk_score >= 90:
+            confidence = 0.99
+        elif risk_score >= 70:
+            confidence = 0.95
+        elif risk_score >= 50:
+            confidence = 0.88
+        else:
+            confidence = 0.8
+        return risk_score, confidence
+
+    @staticmethod
+    def _map_action(risk_score: int) -> EnforcementAction:
+        if risk_score == 0:
+            return EnforcementAction.ALLOW
+        if risk_score >= 80:
+            return EnforcementAction.DENY
+        if risk_score >= 50:
+            return EnforcementAction.QUARANTINE
+        return EnforcementAction.REVIEW

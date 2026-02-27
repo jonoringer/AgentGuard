@@ -12,6 +12,13 @@ class Decision(str, Enum):
     DENY = "deny"
 
 
+class EnforcementAction(str, Enum):
+    ALLOW = "allow"
+    DENY = "deny"
+    QUARANTINE = "quarantine"
+    REVIEW = "review"
+
+
 class AgentAction(BaseModel):
     agent_id: str = Field(..., min_length=1)
     tool: str = Field(..., min_length=1)
@@ -26,10 +33,14 @@ class RuleResult(BaseModel):
     rule: str
     passed: bool
     message: str
+    severity: int = Field(default=0, ge=0, le=100)
 
 
 class EvaluationResponse(BaseModel):
     decision: Decision
+    enforcement_action: EnforcementAction
+    risk_score: int = Field(ge=0, le=100)
+    confidence: float = Field(ge=0.0, le=1.0)
     reasons: list[str]
     rule_results: list[RuleResult]
     audit_id: str
@@ -39,6 +50,9 @@ class AuditRecord(BaseModel):
     audit_id: str
     action: AgentAction
     decision: Decision
+    enforcement_action: EnforcementAction
+    risk_score: int = Field(ge=0, le=100)
+    confidence: float = Field(ge=0.0, le=1.0)
     reasons: list[str]
     rule_results: list[RuleResult]
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

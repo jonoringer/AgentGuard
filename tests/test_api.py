@@ -21,6 +21,11 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual(body["decision"], "deny")
+        self.assertIn(body["enforcement_action"], ["review", "quarantine", "deny"])
+        self.assertGreaterEqual(body["risk_score"], 1)
+        self.assertLessEqual(body["risk_score"], 100)
+        self.assertGreaterEqual(body["confidence"], 0.0)
+        self.assertLessEqual(body["confidence"], 1.0)
         self.assertTrue(body["audit_id"])
 
         logs = self.client.get("/v1/audit/logs", params={"agent_id": "build-bot", "limit": 5})

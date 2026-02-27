@@ -29,18 +29,24 @@ def create_app() -> FastAPI:
 
     @app.post("/v1/guard/evaluate", response_model=EvaluationResponse)
     def evaluate(action: AgentAction) -> EvaluationResponse:
-        decision, reasons, rule_results = engine.evaluate(action)
+        decision, enforcement_action, risk_score, confidence, reasons, rule_results = engine.evaluate(action)
         audit_id = audit.new_audit_id()
         audit_record = AuditRecord(
             audit_id=audit_id,
             action=action,
             decision=decision,
+            enforcement_action=enforcement_action,
+            risk_score=risk_score,
+            confidence=confidence,
             reasons=reasons,
             rule_results=rule_results,
         )
         audit.append(audit_record)
         return EvaluationResponse(
             decision=decision,
+            enforcement_action=enforcement_action,
+            risk_score=risk_score,
+            confidence=confidence,
             reasons=reasons,
             rule_results=rule_results,
             audit_id=audit_id,

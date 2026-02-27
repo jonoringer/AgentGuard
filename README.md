@@ -104,6 +104,9 @@ Typical response:
 ```json
 {
   "decision": "deny",
+  "enforcement_action": "deny",
+  "risk_score": 90,
+  "confidence": 0.99,
   "reasons": [
     "Tool 'exec_shell' is explicitly denied"
   ],
@@ -133,6 +136,9 @@ Typical response includes:
 ```json
 {
   "decision": "allow",
+  "enforcement_action": "allow",
+  "risk_score": 0,
+  "confidence": 0.95,
   "reasons": ["Action allowed by current policy"],
   "audit_id": "..."
 }
